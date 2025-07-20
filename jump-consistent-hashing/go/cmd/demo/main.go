@@ -5,7 +5,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/augists/consistent-hashing-algorithms/jump-consistent-hashing/go/jumphash"
+	"github.com/augists/Jump-CHash/go/jumphash"
 )
 
 func main() {

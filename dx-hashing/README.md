@@ -1,5 +1,43 @@
 # Dx Hashing
 
+## DxHash 原理(核心思想)
+
+DxHash 通过构造多层 deterministic 混合散列结构 (类似跳表式 / 分段式双指数分割) 来实现：
+
+- 无需大规模虚拟节点
+- 近似均匀分布
+- 快速调整：当节点数变化时，使用分段/对数层次结构重新定位受影响 segment，使重映射接近最小。
+
+一般实现抓住两个要点：
+
+1. 多个不同哈希函数 H_i(key) 生成候选槽位。
+2. 利用层次化位运算/指数扩展策略 (doubling / x-split) 在 N 变化时只部分扩展映射表，保持过去分配的绝大多数槽位稳定。
+
+## DxHash C 实现 (dxhash.h / dxhash.c)
+
+为示例，采用多候选 + 级联表：
+
+```c
+#define DX_K 3   // 候选数
+
+typedef struct dxhash {
+    ch_mapping_if_t vtbl;
+    int capacity;      // 当前容量 (按 2^m 扩展)
+    int nodes;         // 活动节点数
+    int *slots;        // 长度 capacity, 值为 node_id
+    uint64_t seed;
+} dxhash_t;
+```
+
+添加节点：
+
+1. 若 nodes == capacity，扩展 capacity *= 2，重建新段 (只对新增一半区间初始化)。
+2. 将新 node_id 均匀填入若干空槽 (或最不平衡槽替换策略)。
+
+查找：生成 K 个哈希 h_i = H_i(key) % capacity，选择第一个非 -1 的槽；若冲突策略可选“最少负载”统计。
+
+> 说明：此 DxHash 简化版用于演示；真实 DxHash 可能有更精细的层次映射与 minimal remap 证明，可在 README 中说明“该实现基于原理重构的工程近似版”。
+
 This directory contains implementations of the Dx Hashing algorithm in Go and C.
 
 ## Concept
