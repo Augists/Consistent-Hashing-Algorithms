@@ -1,23 +1,32 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c11
 
-TARGET = test_consistent_hashing
+TARGETS = test_consistent_hashing demo experiment
 
-SRCS = consistent_hashing.c test_consistent_hashing.c
-OBJS = $(SRCS:.c=.o)
+all: $(TARGETS)
 
-.PHONY: all clean run
+test_consistent_hashing: consistent_hashing.o test_consistent_hashing.o
+	$(CC) $(CFLAGS) $^ -o $@
 
-all: $(TARGET)
+demo: consistent_hashing.o demo.o
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) $(OBJS) -o $@
+experiment: consistent_hashing.o experiment.o
+	$(CC) $(CFLAGS) $^ -o $@
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-run:
-	./$(TARGET)
+.PHONY: all clean run_test run_demo run_experiment
+
+run_test: test_consistent_hashing
+	./test_consistent_hashing
+
+run_demo: demo
+	./demo
+
+run_experiment: experiment
+	./experiment
 
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -f *.o $(TARGETS) results.csv

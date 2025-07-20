@@ -1,0 +1,18 @@
+KETAMA_DIST_START
+Node,Keys,Algorithm
+node0,1000000,ketama_c
+node1,0,ketama_c
+node2,0,ketama_c
+node3,0,ketama_c
+node4,0,ketama_c
+node5,0,ketama_c
+node6,0,ketama_c
+node7,0,ketama_c
+node8,0,ketama_c
+node9,0,ketama_c
+KETAMA_DIST_END
+KETAMA_REMAP_START
+Operation,RemappedKeys,TotalKeys,Algorithm
+Remove, 10000, 10000, ketama_c
+Add, 0, 10000, ketama_c
+KETAMA_REMAP_END

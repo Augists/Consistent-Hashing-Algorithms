@@ -3,54 +3,102 @@
 #include <string.h>
 #include "maglev.h"
 
-#define N 100
-#define M 65537
+#define N_NODES 10 // Number of nodes for distribution experiment
+#define M_LOOKUP_TABLE_SIZE 65537 // Size of the lookup table (prime number)
+#define NUM_KEYS_DISTRIBUTION 1000000 // Number of keys for distribution experiment
+
+// For k-failure experiment
+#define N_K_FAILURE 100 // Total number of nodes in the healthy state for k-failure
+#define M_K_FAILURE 65537 // Size of the Maglev lookup table for k-failure
 
 int main() {
-    // Generate node names
-    const char** nodes = malloc(sizeof(char*) * N);
-    if (!nodes) return 1;
-    for (int i = 0; i < N; i++) {
+    // --- Key Distribution Experiment ---
+    // Generate node names for distribution experiment
+    const char** dist_nodes = malloc(sizeof(char*) * N_NODES);
+    if (!dist_nodes) return 1;
+    for (int i = 0; i < N_NODES; i++) {
         char buf[20];
-        sprintf(buf, "backend-%03d", i);
-        nodes[i] = strdup(buf);
-        if (!nodes[i]) return 1; // Handle allocation failure
+        sprintf(buf, "node%d", i);
+        dist_nodes[i] = strdup(buf);
+        if (!dist_nodes[i]) return 1;
     }
 
-    // Create the initial, healthy Maglev table
-    maglev_t* healthy_maglev = maglev_new(nodes, N, M);
-    if (!healthy_maglev) {
-        fprintf(stderr, "Failed to create healthy Maglev table\n");
+    maglev_t* dist_maglev = maglev_new(dist_nodes, N_NODES, M_LOOKUP_TABLE_SIZE);
+    if (!dist_maglev) {
+        fprintf(stderr, "Failed to create Maglev table for distribution experiment\n");
         return 1;
     }
 
-    printf("k,disruption_percent\n");
+    int* counts_dist = calloc(N_NODES, sizeof(int));
+    if (!counts_dist) return 1;
 
-    // Simulate removing k nodes, from 1 to N-1
-    for (int k = 1; k < N; k++) {
-        // The first k nodes are considered "failed"
-        // We can just pass the sub-array of nodes to maglev_new
-        const char** unhealthy_nodes = &nodes[k];
-        int unhealthy_n = N - k;
+    char key_buf[30];
+    for (uint64_t i = 0; i < NUM_KEYS_DISTRIBUTION; i++) {
+        sprintf(key_buf, "key-%llu", i);
+        const char* assigned_node = maglev_get(dist_maglev, key_buf);
+        for (int j = 0; j < N_NODES; j++) {
+            if (strcmp(assigned_node, dist_nodes[j]) == 0) {
+                counts_dist[j]++;
+                break;
+            }
+        }
+    }
 
-        maglev_t* unhealthy_maglev = maglev_new(unhealthy_nodes, unhealthy_n, M);
+    printf("MAGLEV_DIST_START\n");
+    printf("Node,Keys,Algorithm\n");
+    for (int i = 0; i < N_NODES; i++) {
+        printf("node%d,%d,maglev_c\n", i, counts_dist[i]);
+    }
+    printf("MAGLEV_DIST_END\n");
+
+    free(counts_dist);
+    maglev_free(dist_maglev);
+    for (int i = 0; i < N_NODES; i++) {
+        free((void*)dist_nodes[i]);
+    }
+    free(dist_nodes);
+
+    // --- k-Failure Disruption Experiment (Existing, modified for stdout) ---
+    // Generate node names for k-failure experiment
+    const char** k_failure_nodes = malloc(sizeof(char*) * N_K_FAILURE);
+    if (!k_failure_nodes) return 1;
+    for (int i = 0; i < N_K_FAILURE; i++) {
+        char buf[20];
+        sprintf(buf, "backend-%03d", i);
+        k_failure_nodes[i] = strdup(buf);
+        if (!k_failure_nodes[i]) return 1;
+    }
+
+    maglev_t* healthy_maglev = maglev_new(k_failure_nodes, N_K_FAILURE, M_K_FAILURE);
+    if (!healthy_maglev) {
+        fprintf(stderr, "Failed to create healthy Maglev table for k-failure experiment\n");
+        return 1;
+    }
+
+    printf("MAGLEV_REMAP_START\n");
+    printf("k,disruption_percent,Algorithm\n"); // Added Algorithm column
+
+    // Simulate removing k nodes, from 1 to N_K_FAILURE-1
+    for (int k = 1; k < N_K_FAILURE; k++) {
+        const char** unhealthy_nodes = &k_failure_nodes[k];
+        size_t unhealthy_n = N_K_FAILURE - k;
+
+        maglev_t* unhealthy_maglev = maglev_new(unhealthy_nodes, unhealthy_n, M_K_FAILURE);
         if (!unhealthy_maglev) {
             fprintf(stderr, "Failed to create unhealthy Maglev table for k=%d\n", k);
             return 1;
         }
 
-        // Compare the lookup tables
         int disruptions = 0;
         int valid_entries = 0;
 
-        for (int i = 0; i < M; i++) {
+        for (size_t i = 0; i < M_K_FAILURE; i++) {
             int healthy_node_index = healthy_maglev->lookup[i];
             const char* healthy_node_name = healthy_maglev->nodes[healthy_node_index];
 
-            // Check if the original node is in the failed set
             int is_failed = 0;
             for (int j = 0; j < k; j++) {
-                if (strcmp(healthy_node_name, nodes[j]) == 0) {
+                if (strcmp(healthy_node_name, k_failure_nodes[j]) == 0) {
                     is_failed = 1;
                     break;
                 }
@@ -74,17 +122,18 @@ int main() {
             disruption_percent = (double)disruptions / valid_entries * 100.0;
         }
 
-        printf("%d,%.4f\n", k, disruption_percent);
+        printf("%d,%.4f,maglev_c\n", k, disruption_percent); // Added Algorithm column
 
         maglev_free(unhealthy_maglev);
     }
+    printf("MAGLEV_REMAP_END\n");
 
-    // Cleanup
+    // Cleanup for k-failure experiment
     maglev_free(healthy_maglev);
-    for (int i = 0; i < N; i++) {
-        free((void*)nodes[i]);
+    for (int i = 0; i < N_K_FAILURE; i++) {
+        free((void*)k_failure_nodes[i]);
     }
-    free(nodes);
+    free(k_failure_nodes);
 
     return 0;
 }

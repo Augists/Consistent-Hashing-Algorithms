@@ -63,9 +63,9 @@ void destroy_hash_ring(HashRing* hr) {
     if (!hr) return;
     if (hr->nodes) free(hr->nodes);
     if (hr->node_names) {
-        // Free individual node names if they were dynamically allocated
-        // For this simple implementation, we assume node_names are static strings
-        // or managed externally. If they were strdup'd, they'd need freeing here.
+        for (int i = 0; i < hr->num_nodes; i++) {
+            free(hr->node_names[i]); // Free individual node names
+        }
         free(hr->node_names);
     }
     free(hr);
@@ -125,6 +125,16 @@ void remove_node(HashRing* hr, const char* node_name) {
                 hr->nodes[j] = hr->nodes[j+1];
                 hr->node_names[j] = hr->node_names[j+1];
             }
+            // Shift elements to fill the gap
+            for (int j = found_idx; j < hr->num_nodes - 1; j++) {
+                hr->nodes[j] = hr->nodes[j+1];
+                hr->node_names[j] = hr->node_names[j+1];
+            }
+            // Free the last element's string and set its pointer to NULL
+            // before decrementing num_nodes
+            free(hr->node_names[hr->num_nodes - 1]); // Free the string at the old last position
+            hr->node_names[hr->num_nodes - 1] = NULL; // Set the pointer to NULL
+            hr->nodes[hr->num_nodes - 1] = 0; // Clear the hash at the old last position
             hr->num_nodes--;
         }
     }

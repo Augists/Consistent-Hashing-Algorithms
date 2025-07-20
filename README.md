@@ -9,6 +9,8 @@ This repository explores different consistent hashing algorithms, providing impl
 3.  **Maglev Consistent Hash**
 4.  **Rendezvous Hashing (HRW - Highest Random Weight)**
 5.  **Multi-Probe Consistent Hashing**
+6.  **Anchor Hashing**
+7.  **Dx Hashing**
 
 ## 1. Hash Ring Consistent Hashing Variants
 
@@ -95,13 +97,52 @@ For detailed information on these variants, their implementations, and how to ru
 
 **How to Run:** Refer to the `multi-probe-consistent-hashing/README.md` for detailed instructions.
 
-| Feature             | Hash Ring Variants          | Jump Consistent Hash      | Maglev Consistent Hash      | Rendezvous Hashing (HRW)    | Multi-Probe Consistent Hashing |
-| :------------------ | :-------------------------- | :------------------------ | :-------------------------- | :-------------------------- | :----------------------------- |
-| **Complexity**      | Medium                      | Low                       | High                        | Low                         | Medium                         |
-| **Lookup Speed**    | O(log N)                    | O(log N) (iterative)      | O(1)                        | O(N)                        | O(P * log N)                   |
-| **Node Add/Remove** | Good (minimal reassignments)| Good (add only)           | Excellent                   | Good (minimal reassignments)| Good (minimal reassignments)   |
-| **Stateful?**       | Yes (maintains ring)        | No                        | Yes (permutation tables)    | No                          | Yes (maintains ring)           |
-| **Weighted Nodes**  | Yes (via virtual nodes)     | No                        | Yes                         | Yes (via custom weight func)| Yes (via virtual nodes)        |
-| **Use Case**        | General distributed systems, caching | Simple, fast key mapping  | High-performance load balancing | Simple, decentralized key mapping | Improved load balancing for hash rings |
+## 6. Anchor Hashing
+
+**Concept:** Anchor Hashing is a consistent hashing algorithm that provides full consistency and high performance. It works by pre-allocating a fixed-size array of "anchor" buckets. When a key is mapped, it's hashed to one of these anchor buckets. If the bucket is active, the key is assigned to the corresponding server. If not, the key is re-hashed until an active bucket is found. This method avoids the rebalancing issues of ring-based algorithms.
+
+**Pros:**
+*   Full consistency with minimal disruption.
+*   High scalability and fast lookups.
+*   Low memory footprint.
+
+**Cons:**
+*   The basic version has a fixed capacity of nodes.
+
+**Implementations:**
+*   **Go:** `anchor-hashing/go/`
+*   **C:** `anchor-hashing/c/`
+
+**How to Run:** Refer to the `anchor-hashing/README.md` for detailed instructions.
+
+## 7. Dx Hashing
+
+**Concept:** Dx Hashing uses a pseudo-random sequence to map keys to nodes. For each key, it generates a sequence of potential node IDs. The algorithm iterates through this sequence until it finds an active node, which is then chosen as the destination. This provides strong load balancing and fast updates.
+
+**Pros:**
+*   Excellent load balancing.
+*   Extremely fast node additions and removals (O(1)).
+*   Simple to implement.
+
+**Cons:**
+*   Like Anchor Hashing, it has a fixed capacity for nodes determined at initialization.
+
+**Implementations:**
+*   **Go:** `dx-hashing/go/`
+*   **C:** `dx-hashing/c/`
+
+**How to Run:** Refer to the `dx-hashing/README.md` for detailed instructions.
+
+## Algorithm Comparison
+
+| Feature             | Hash Ring Variants          | Jump Consistent Hash      | Maglev Consistent Hash      | Rendezvous Hashing (HRW)    | Multi-Probe Consistent Hashing | Anchor Hashing | Dx Hashing |
+| :------------------ | :-------------------------- | :------------------------ | :-------------------------- | :-------------------------- | :----------------------------- | :------------------ | :------------- |
+| **Complexity**      | Medium                      | Low                       | High                        | Low                         | Medium                         | Medium              | Low            |
+| **Lookup Speed**    | O(log N)                    | O(log N) (iterative)      | O(1)                        | O(N)                        | O(P * log N)                   | O(1) (amortized)    | O(1) (amortized) |
+| **Update Speed**    | O(N) or O(K log N) for K nodes | N/A (add only)           | O(M*N)                      | O(1)                        | O(log N)                       | O(1)                | O(1)           |
+| **Node Add/Remove** | Good (minimal reassignments)| Good (add only)           | Excellent                   | Good (minimal reassignments)| Good (minimal reassignments)   | Excellent           | Excellent      |
+| **Stateful?**       | Yes (maintains ring)        | No                        | Yes (permutation tables)    | No                          | Yes (maintains ring)           | Yes (node state array) | Yes (node state array) |
+| **Weighted Nodes**  | Yes (via virtual nodes)     | No                        | Yes                         | Yes (via custom weight func)| Yes (via virtual nodes)        | Yes                 | Yes            |
+| **Use Case**        | General distributed systems, caching | Simple, fast key mapping  | High-performance load balancing | Simple, decentralized key mapping | Improved load balancing for hash rings | Scalable, consistent load balancing | Fast, dynamic environments |
 
 Choose the algorithm that best fits your specific requirements for complexity, performance, and flexibility in handling node changes.

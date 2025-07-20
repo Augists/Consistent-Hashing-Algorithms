@@ -3,62 +3,95 @@ package main
 import (
 	"fmt"
 	"log"
+	"strconv" // Added for key generation
 
-	"github.com/augists/Maglev-CHash/go"
+	"github.com/augists/Maglev-CHash/go" // Assuming this is the correct import for the maglev package
 )
 
 const (
-	// N is the total number of nodes in the healthy state.
-	N = 100
-	// M is the size of the Maglev lookup table.
-	M = 65537
+	// N_DIST is the number of nodes for the distribution experiment.
+	N_DIST = 10
+	// M_DIST is the size of the Maglev lookup table for distribution experiment.
+	M_DIST = 65537
+	// NUM_KEYS_DISTRIBUTION is the number of keys for the distribution experiment.
+	NUM_KEYS_DISTRIBUTION = 1000000
+
+	// N_K_FAILURE is the total number of nodes in the healthy state for k-failure experiment.
+	N_K_FAILURE = 100
+	// M_K_FAILURE is the size of the Maglev lookup table for k-failure experiment.
+	M_K_FAILURE = 65537
 )
 
 func main() {
-	// Generate node names
-	nodes := make([]string, N)
-	for i := 0; i < N; i++ {
-		nodes[i] = fmt.Sprintf("backend-%03d", i)
+	// --- Key Distribution Experiment ---
+	distNodes := make([]string, N_DIST)
+	for i := 0; i < N_DIST; i++ {
+		distNodes[i] = fmt.Sprintf("node%d", i)
 	}
 
-	// Create the initial, healthy Maglev table
-	healthyMaglev, err := maglev.New(nodes, M)
+	distMaglev, err := maglev.New(distNodes, M_DIST)
+	if err != nil {
+		log.Fatalf("Failed to create Maglev table for distribution experiment: %v", err)
+	}
+
+	countsDist := make(map[string]int)
+	for i := 0; i < N_DIST; i++ {
+		countsDist[distNodes[i]] = 0
+	}
+
+	for i := 0; i < NUM_KEYS_DISTRIBUTION; i++ {
+		key := "key-" + strconv.Itoa(i)
+		assignedNode := distMaglev.Get(key)
+		countsDist[assignedNode]++
+	}
+
+	fmt.Println("MAGLEV_DIST_START")
+	fmt.Println("Node,Keys,Algorithm")
+	for i := 0; i < N_DIST; i++ {
+		fmt.Printf("node%d,%d,maglev_go\n", i, countsDist[distNodes[i]])
+	}
+	fmt.Println("MAGLEV_DIST_END")
+
+
+	// --- k-Failure Disruption Experiment (Existing, modified for stdout) ---
+	// Generate node names for k-failure experiment
+	kFailureNodes := make([]string, N_K_FAILURE)
+	for i := 0; i < N_K_FAILURE; i++ {
+		kFailureNodes[i] = fmt.Sprintf("backend-%03d", i)
+	}
+
+	healthyMaglev, err := maglev.New(kFailureNodes, M_K_FAILURE)
 	if err != nil {
 		log.Fatalf("Failed to create healthy Maglev table: %v", err)
 	}
 
-	fmt.Println("k,disruption_percent")
+	fmt.Println("MAGLEV_REMAP_START")
+	fmt.Println("k,disruption_percent,Algorithm") // Added Algorithm column
 
-	// Simulate removing k nodes, from 1 to N-1
-	for k := 1; k < N; k++ {
-		// The first k nodes are considered "failed"
+	// Simulate removing k nodes, from 1 to N_K_FAILURE-1
+	for k := 1; k < N_K_FAILURE; k++ {
 		failedNodes := make(map[string]bool)
 		for i := 0; i < k; i++ {
-			failedNodes[nodes[i]] = true
+			failedNodes[kFailureNodes[i]] = true
 		}
 
-		// Create the list of healthy nodes for the unhealthy table
-		unhealthyNodes := nodes[k:]
+		unhealthyNodes := kFailureNodes[k:]
 
-		unhealthyMaglev, err := maglev.New(unhealthyNodes, M)
+		unhealthyMaglev, err := maglev.New(unhealthyNodes, M_K_FAILURE)
 		if err != nil {
 			log.Fatalf("Failed to create unhealthy Maglev table for k=%d: %v", k, err)
 		}
 
-		// Now, compare the lookup tables
 		disruptions := 0
-		for i := 0; i < M; i++ {
+		for i := 0; i < M_K_FAILURE; i++ {
 			healthyNodeIndex := healthyMaglev.Lookup[i]
-			healthyNodeName := nodes[healthyNodeIndex]
+			healthyNodeName := kFailureNodes[healthyNodeIndex]
 
-			// If the original entry pointed to a now-failed node, we don't count it as a disruption.
-			// This is what the paper's experiment measures: "minimal disruption to the lookup table".
 			if _, isFailed := failedNodes[healthyNodeName]; isFailed {
 				continue
 			}
 
 			unhealthyNodeIndex := unhealthyMaglev.Lookup[i]
-			// The unhealthyMaglev.nodes slice is a sub-slice of the original nodes list (nodes[k:])
 			unhealthyNodeName := unhealthyNodes[unhealthyNodeIndex]
 
 			if healthyNodeName != unhealthyNodeName {
@@ -66,11 +99,10 @@ func main() {
 			}
 		}
 		
-		// Total entries that did not point to a failed node initially
-		validEntries := M
-		for i := 0; i < M; i++ {
+		validEntries := M_K_FAILURE
+		for i := 0; i < M_K_FAILURE; i++ {
 			healthyNodeIndex := healthyMaglev.Lookup[i]
-			healthyNodeName := nodes[healthyNodeIndex]
+			healthyNodeName := kFailureNodes[healthyNodeIndex]
 			if _, isFailed := failedNodes[healthyNodeName]; isFailed {
 				validEntries--
 			}
@@ -81,6 +113,9 @@ func main() {
 			disruptionPercent = float64(disruptions) / float64(validEntries) * 100.0
 		}
 
-		fmt.Printf("%d,%.4f\n", k, disruptionPercent)
+		fmt.Printf("%d,%.4f,maglev_go\n", k, disruptionPercent) // Added Algorithm column
+
+		// No explicit free for Go, garbage collector handles it
 	}
+	fmt.Println("MAGLEV_REMAP_END")
 }

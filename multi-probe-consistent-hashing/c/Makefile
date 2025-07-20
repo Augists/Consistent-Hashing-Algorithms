@@ -1,23 +1,31 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c11
+CFLAGS = -I. -g -Wall -Wextra -std=c11
 
-TARGET = test_multi_probe_hashing
+all: test_multi_probe_hashing demo experiment
 
-SRCS = multi_probe_hashing.c test_multi_probe_hashing.c
-OBJS = $(SRCS:.c=.o)
+test_multi_probe_hashing: multi_probe_hashing.o test_multi_probe_hashing.o
+	$(CC) $(CFLAGS) -o test_multi_probe_hashing multi_probe_hashing.o test_multi_probe_hashing.o
 
-.PHONY: all clean run
+demo: multi_probe_hashing.o demo.o
+	$(CC) $(CFLAGS) -o demo multi_probe_hashing.o demo.o
 
-all: $(TARGET)
+experiment: multi_probe_hashing.o experiment.o
+	$(CC) $(CFLAGS) -o experiment multi_probe_hashing.o experiment.o
 
-$(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) $(OBJS) -o $@
+multi_probe_hashing.o: multi_probe_hashing.c multi_probe_hashing.h
+	$(CC) $(CFLAGS) -c multi_probe_hashing.c
 
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+test_multi_probe_hashing.o: test_multi_probe_hashing.c multi_probe_hashing.h
+	$(CC) $(CFLAGS) -c test_multi_probe_hashing.c
 
-run:
-	./$(TARGET)
+demo.o: demo.c multi_probe_hashing.h
+	$(CC) $(CFLAGS) -c demo.c
+
+experiment.o: experiment.c multi_probe_hashing.h
+	$(CC) $(CFLAGS) -c experiment.c
+
+run_tests: test_multi_probe_hashing
+	./test_multi_probe_hashing
 
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -f *.o test_multi_probe_hashing demo experiment results.csv
