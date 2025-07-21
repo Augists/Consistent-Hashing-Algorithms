@@ -1,93 +1,70 @@
 package dxhash
 
 import (
-	"fmt"
 	"hash/fnv"
-	"sync"
 )
 
-// DxHash represents the DxHash consistent hashing algorithm.
+// Active returns the active bucket slice (for experiment use)
+func (h *DxHash) Active() []bool {
+	return h.active
+}
+
 type DxHash struct {
-	mu         sync.RWMutex
-	nodes      []string
-	nodeStatus []bool
-	inactive   []int
-	nodeMap    map[string]int
+	numBuckets int
+	active     []bool
+	L          int // number of hash functions
 }
 
-// New creates a new DxHash instance with a given size.
-func New(size int) *DxHash {
+func NewDxHash(numBuckets, L int) *DxHash {
 	h := &DxHash{
-		nodes:      make([]string, size),
-		nodeStatus: make([]bool, size),
-		inactive:   make([]int, size),
-		nodeMap:    make(map[string]int),
+		numBuckets: numBuckets,
+		active:     make([]bool, numBuckets),
+		L:          L,
 	}
-	for i := 0; i < size; i++ {
-		h.inactive[i] = size - 1 - i
+	for i := 0; i < numBuckets; i++ {
+		h.active[i] = true
 	}
-	return h;
+	return h
 }
 
-// Add adds a node to the hash.
-func (h *DxHash) Add(node string) (int, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if len(h.inactive) == 0 {
-		return -1, fmt.Errorf("hash is full")
-	}
-
-	idx := h.inactive[len(h.inactive)-1]
-	h.inactive = h.inactive[:len(h.inactive)-1]
-
-	h.nodes[idx] = node
-	h.nodeStatus[idx] = true
-	h.nodeMap[node] = idx
-
-	return idx, nil
-}
-
-// Remove removes a node from the hash.
-func (h *DxHash) Remove(node string) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	idx, ok := h.nodeMap[node]
-	if !ok {
-		return fmt.Errorf("node not found")
-	}
-
-	h.nodeStatus[idx] = false
-	h.inactive = append(h.inactive, idx)
-	delete(h.nodeMap, node)
-
-	return nil
-}
-
-// Get finds the node for a given key.
-func (h *DxHash) Get(key string) (string, error) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	if len(h.nodeMap) == 0 {
-		return "", fmt.Errorf("no nodes in hash")
-	}
-
-	hasher := fnv.New64a()
-	hasher.Write([]byte(key))
-	r := hasher.Sum64()
-
-	for {
-		nodeID := r % uint64(len(h.nodes))
-		if h.nodeStatus[nodeID] {
-			return h.nodes[nodeID], nil
+func (h *DxHash) Map(key uint64) int {
+	for i := 0; i < h.L; i++ {
+		b := int(hash64WithSalt(key, uint64(i)) % uint64(h.numBuckets))
+		if h.active[b] {
+			return b
 		}
-		r = h.nextRandom(r)
+	}
+	// fallback: return first active bucket
+	for b := 0; b < h.numBuckets; b++ {
+		if h.active[b] {
+			return b
+		}
+	}
+	return -1 // no active bucket
+}
+
+func (h *DxHash) Remove(bucket int) {
+	if bucket >= 0 && bucket < h.numBuckets {
+		h.active[bucket] = false
 	}
 }
 
-func (h *DxHash) nextRandom(r uint64) uint64 {
-	// Simple LCG for pseudo-random number generation
-	return (r*1664525 + 1013904223)
+func (h *DxHash) Add(bucket int) {
+	if bucket >= 0 && bucket < h.numBuckets {
+		h.active[bucket] = true
+	}
+}
+
+func hash64WithSalt(key uint64, salt uint64) uint64 {
+	hash := fnv.New64a()
+	var b [8]byte
+	for i := 0; i < 8; i++ {
+		b[i] = byte(key >> (8 * i))
+	}
+	hash.Write(b[:])
+	for i := 0; i < 8; i++ {
+		b[i] = byte(salt >> (8 * i))
+	}
+	hash.Write(b[:])
+	return hash.Sum64()
 }

@@ -1,99 +1,176 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <time.h>
-#include <string.h>
 #include "dx_hash.h"
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <math.h>
 
-#define NUM_NODES 10
-#define NUM_KEYS 1000000
-#define HASH_SIZE 20 // Must be >= NUM_NODES
-#define REMAP_KEYS 10000 // Number of keys to test for remapping
+#define INITIAL_NODES 1000
+#define KEYS 1000000 // Increased keys for better statistical significance with more nodes
 
-int main() {
-    char key_dist[20]; // Moved declaration to top
-    char remap_key[20]; // Moved declaration to top
+// For remapping curve experiments
+#define REMOVAL_STEPS 11 // 0% to 50% removal in 5% increments
+#define ADDITION_STEPS 11 // 0% to 50% addition in 5% increments (relative to removed nodes)
+#define REMOVE_PERCENTAGE_FOR_ADDITION 0.20 // Remove 20% of nodes before adding back
 
-    // --- Key Distribution Experiment ---
-    dx_hash_t* h_dist = dx_hash_new(HASH_SIZE);
-    char node_name_dist[20];
-    int counts_dist[NUM_NODES] = {0};
-
-    for (int i = 0; i < NUM_NODES; i++) {
-        sprintf(node_name_dist, "node%d", i);
-        dx_hash_add(h_dist, node_name_dist);
+// 峰均值比实验
+double peak_to_average(dx_hash_t *ctx) {
+    int *counts = calloc(ctx->N, sizeof(int));
+    for (uint64_t k = 0; k < KEYS; ++k) {
+        int b = dx_hash_map(ctx, k);
+        counts[b]++;
     }
+    int peak = 0, sum = 0;
+    for (int i = 0; i < ctx->N; ++i) {
+        if (ctx->A[i]) {
+            if (counts[i] > peak) peak = counts[i];
+            sum += counts[i];
+        }
+    }
+    double avg = sum * 1.0 / ctx->a;
+    free(counts);
+    return peak / avg;
+}
 
-    for (int i = 0; i < NUM_KEYS; i++) {
-        sprintf(key_dist, "key%d", i);
-        const char* node = dx_hash_get(h_dist, key_dist);
-        if (node) {
-            for (int j = 0; j < NUM_NODES; j++) {
-                sprintf(node_name_dist, "node%d", j);
-                if (strcmp(node, node_name_dist) == 0) {
-                    counts_dist[j]++;
-                    break;
-                }
+// 多步扩缩容重映射比例实验 (移除节点)，输出到 dx_remap_removal_curve.csv
+void remap_removal_experiment() {
+    FILE *f = fopen("results/dx_remap_removal_curve.csv", "w");
+    if (!f) f = fopen("../results/dx_remap_removal_curve.csv", "w");
+    if (!f) {
+        printf("Cannot open results/dx_remap_removal_curve.csv for write!\n");
+        return;
+    }
+    fprintf(f, "remove_ratio,remap_ratio\n");
+    for (int step = 0; step < REMOVAL_STEPS; ++step) {
+        double remove_ratio = (double)step / (REMOVAL_STEPS - 1) * 0.5; // 0% to 50%
+        int remove_cnt = (int)(INITIAL_NODES * remove_ratio);
+        if (remove_cnt > INITIAL_NODES) remove_cnt = INITIAL_NODES; // Cap at initial nodes
+
+        dx_hash_t ctx;
+        dx_hash_init(&ctx, INITIAL_NODES, INITIAL_NODES);
+        int *before = malloc(KEYS * sizeof(int));
+        for (uint64_t k = 0; k < KEYS; ++k)
+            before[k] = dx_hash_map(&ctx, k);
+
+        int removed_actual = 0;
+        for (int i = 0; i < INITIAL_NODES && removed_actual < remove_cnt; ++i) {
+            if (ctx.A[i]) { // Only remove if active
+                dx_hash_remove(&ctx, i);
+                removed_actual++;
             }
         }
+        
+        int changed = 0;
+        for (uint64_t k = 0; k < KEYS; ++k) {
+            int after = dx_hash_map(&ctx, k);
+            if (after != before[k]) changed++;
+        }
+        free(before);
+        double remap = changed * 1.0 / KEYS;
+        fprintf(f, "%.2f,%.4f\n", (double)removed_actual / INITIAL_NODES, remap);
+        dx_hash_free(&ctx);
+    }
+    fclose(f);
+    printf("Remapping removal curve data written to results/dx_remap_removal_curve.csv\n");
+}
+
+// 多步扩缩容重映射比例实验 (添加节点)，输出到 dx_remap_addition_curve.csv
+void remap_addition_experiment() {
+    FILE *f = fopen("results/dx_remap_addition_curve.csv", "w");
+    if (!f) f = fopen("../results/dx_remap_addition_curve.csv", "w");
+    if (!f) {
+        printf("Cannot open results/dx_remap_addition_curve.csv for write!\n");
+        return;
+    }
+    fprintf(f, "add_ratio,remap_ratio\n");
+
+    // Initial state: remove a fixed percentage of nodes
+    int initial_removed_count = (int)(INITIAL_NODES * REMOVE_PERCENTAGE_FOR_ADDITION);
+    if (initial_removed_count == 0 && INITIAL_NODES > 0) initial_removed_count = 1; // Ensure at least one node is removed if possible
+    if (initial_removed_count > INITIAL_NODES) initial_removed_count = INITIAL_NODES;
+
+    dx_hash_t base_ctx;
+    dx_hash_init(&base_ctx, INITIAL_NODES, INITIAL_NODES);
+    int *initial_mappings = malloc(KEYS * sizeof(int));
+    for (uint64_t k = 0; k < KEYS; ++k) {
+        initial_mappings[k] = dx_hash_map(&base_ctx, k);
     }
 
-    // Print distribution results to stdout
-    printf("DX_DIST_START\n");
-    printf("Node,Keys,Algorithm\n");
-    for (int i = 0; i < NUM_NODES; i++) {
-        printf("node%d,%d,dx_c\n", i, counts_dist[i]);
-    }
-    printf("DX_DIST_END\n");
-    dx_hash_free(h_dist);
-
-    // --- Remapping Experiment ---
-    dx_hash_t* h_remap = dx_hash_new(HASH_SIZE);
-    char initial_node[REMAP_KEYS][20];
-    int remapped_on_remove = 0;
-    int remapped_on_add = 0;
-
-    for (int i = 0; i < NUM_NODES; i++) {
-        sprintf(node_name_dist, "node%d", i);
-        dx_hash_add(h_remap, node_name_dist);
-    }
-
-    for (int i = 0; i < REMAP_KEYS; i++) {
-        sprintf(remap_key, "remap_key%d", i);
-        const char* node = dx_hash_get(h_remap, remap_key);
-        if (node) {
-            strcpy(initial_node[i], node);
-        } else {
-            strcpy(initial_node[i], "NULL");
+    // Perform initial removal
+    int *removed_indices = malloc(initial_removed_count * sizeof(int));
+    int removed_count_actual = 0;
+    for (int i = 0; i < INITIAL_NODES && removed_count_actual < initial_removed_count; ++i) {
+        if (base_ctx.A[i]) {
+            dx_hash_remove(&base_ctx, i);
+            removed_indices[removed_count_actual++] = i;
         }
     }
 
-    dx_hash_remove(h_remap, "node9");
-
-    for (int i = 0; i < REMAP_KEYS; i++) {
-        sprintf(remap_key, "remap_key%d", i);
-        const char* new_node = dx_hash_get(h_remap, remap_key);
-        if (!new_node || strcmp(initial_node[i], new_node) != 0) {
-            remapped_on_remove++;
-        }
+    // Store mappings after initial removal
+    int *mappings_after_initial_removal = malloc(KEYS * sizeof(int));
+    for (uint64_t k = 0; k < KEYS; ++k) {
+        mappings_after_initial_removal[k] = dx_hash_map(&base_ctx, k);
     }
 
-    dx_hash_add(h_remap, "node9");
+    // Now, add nodes back iteratively
+    for (int step = 0; step < ADDITION_STEPS; ++step) {
+        double add_ratio = (double)step / (ADDITION_STEPS - 1); // 0% to 100% of removed nodes added back
+        int add_cnt = (int)(initial_removed_count * add_ratio);
+        if (add_cnt > initial_removed_count) add_cnt = initial_removed_count;
 
-    for (int i = 0; i < REMAP_KEYS; i++) {
-        sprintf(remap_key, "remap_key%d", i);
-        const char* new_node = dx_hash_get(h_remap, remap_key);
-        if (!new_node || strcmp(initial_node[i], new_node) != 0) {
-            remapped_on_add++;
+        // Create a new context for each step to ensure clean state
+        dx_hash_t current_ctx;
+        dx_hash_init(&current_ctx, INITIAL_NODES, INITIAL_NODES - initial_removed_count); // Start with removed nodes
+        
+        // Re-remove nodes for current step
+        for(int i = 0; i < removed_count_actual; ++i) {
+            dx_hash_remove(&current_ctx, removed_indices[i]);
         }
+
+        // Add back nodes for current step
+        for (int i = 0; i < add_cnt; ++i) {
+            dx_hash_add(&current_ctx, removed_indices[i]);
+        }
+
+        int changed = 0;
+        for (uint64_t k = 0; k < KEYS; ++k) {
+            int current_map = dx_hash_map(&current_ctx, k);
+            if (current_map != mappings_after_initial_removal[k]) {
+                changed++;
+            }
+        }
+        fprintf(f, "%.2f,%.4f\n", (double)add_cnt / initial_removed_count, changed * 1.0 / KEYS);
+        dx_hash_free(&current_ctx);
     }
 
-    // Print remapping results to stdout
-    printf("DX_REMAP_START\n");
-    printf("Operation,RemappedKeys,TotalKeys,Algorithm\n");
-    printf("Remove, %d, %d, dx_c\n", remapped_on_remove, REMAP_KEYS);
-    printf("Add, %d, %d, dx_c\n", remapped_on_add, REMAP_KEYS);
-    printf("DX_REMAP_END\n");
-    dx_hash_free(h_remap);
+    free(initial_mappings);
+    free(mappings_after_initial_removal);
+    free(removed_indices);
+    dx_hash_free(&base_ctx);
+    fclose(f);
+    printf("Remapping addition curve data written to results/dx_remap_addition_curve.csv\n");
+}
 
+
+int main() {
+    // 峰均值比实验
+    dx_hash_t ctx;
+    FILE *f = fopen("results/dx_experiment.csv", "w");
+    if (!f) f = fopen("../results/dx_experiment.csv", "w");
+    if (!f) {
+        printf("Cannot open results/dx_experiment.csv for write!\n");
+        return 1;
+    }
+    dx_hash_init(&ctx, INITIAL_NODES, INITIAL_NODES);
+    double p2a = peak_to_average(&ctx);
+    fprintf(f, "peak_to_average,%.4f\n", p2a);
+    dx_hash_free(&ctx);
+    fclose(f);
+    printf("Peak/average data written to results/dx_experiment.csv\n");
+
+    // 多步扩缩容重映射比例实验 (移除节点)
+    remap_removal_experiment();
+
+    // 多步扩缩容重映射比例实验 (添加节点)
+    remap_addition_experiment();
     return 0;
 }

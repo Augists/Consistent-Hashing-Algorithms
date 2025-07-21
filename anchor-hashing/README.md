@@ -1,119 +1,92 @@
-# Anchor Hashing
+# AnchorHash
 
-## AnchorHash 原理(核心思想)
+AnchorHash is an efficient O(1) consistent hashing algorithm designed for distributed systems, offering fast node additions/removals and minimal key remapping. It is well-suited for applications like distributed caches and load balancers.
 
-AnchorHash 维护：
+## Algorithm Principle
 
-1. 固定大小的 锚集合 A (容量 M ≥ 当前节点数 N)。
-2. 动态 活动集合 W (当前在线节点)。
-3. 一个 退役堆栈 R，用于快速回收和再激活。
+AnchorHash maintains an Anchor Set and a Working Set. Each key is initially hashed to a bucket in the Anchor Set. If the bucket is active (part of the Working Set), the key is mapped directly. Otherwise, the key is rehashed based on a deterministic probing sequence until an active bucket is found.
 
-映射过程：对 key 迭代哈希：
+### Pseudocode
 
 ```c
-h = H(key) % |A|
-while bucket h 不在 W:
-    h = H(key || h) % prev_removed_index_of(h)
-return bucket_to_node[h]
+h = H(key) % |A|; // Initial hash to an anchor bucket
+while bucket h is not in W: // If bucket is inactive
+    h = H(key || h) % prev_removed_index_of(h); // Rehash based on probing sequence
+return bucket_to_node[h];
 ```
 
-通过可逆的剥离顺序确保删除节点时仅影响该节点键的最少子集；添加时 O(1) 恢复。其关键是：每个被删除的 bucket 记录一个“前驱活动容量”值，用于限制下一轮哈希范围，保证期望常数次重试。
+## Directory Structure
 
-性质：
+-   `c/`: C language implementation, tests, and experiments.
+-   `go/`: Go language implementation, tests, and experiments.
+-   `results/`: Stores experiment results (CSV files, plots).
+-   `scripts/`: Contains unified Python scripts for running experiments and plotting results.
 
-- 查找期望 O(1) (摊还)
-- 删除 / 添加 O(1)
-- 重映射最小：仅涉及被删 bucket 的键。
+## How to Run Experiments
 
-## AnchorHash C 实现 (anchorhash.h / anchorhash.c)
+To run the experiments and generate plots, follow these steps for both C and Go implementations:
 
-核心结构：
+### C Implementation
 
-```c
-typedef struct anchorhash {
-    ch_mapping_if_t vtbl;
-    int M;              // 锚总数
-    int active;         // 当前活动数
-    int *bucket2node;   // 大小 M
-    int *node_refcnt;   // 统计 (可选)
-    int *stack;         // 退役栈 (存放被删除 bucket 序列)
-    int top;            // 栈顶
-    int *prev_size;     // 每个 bucket 删除当时的活动容量
-    uint64_t seed;
-} anchorhash_t;
-```
+1.  Navigate to the C directory:
+    ```sh
+    cd anchor-hashing/c
+    ```
+2.  Build the experiment executable:
+    ```sh
+    make experiment
+    ```
+3.  Run the experiment:
+    ```sh
+    ./experiment
+    ```
+    This will generate `anchor_experiment.csv`, `anchor_remap_removal_curve.csv`, and `anchor_remap_addition_curve.csv` in the `anchor-hashing/results/` directory.
 
-get_node 伪代码：
+### Go Implementation
 
-```c
-int anchor_get_node(void *self, const void *key, size_t len) {
-    anchorhash_t *ctx = self;
-    uint64_t h = ch_hash64(key, len, ctx->seed);
-    int b = h % ctx->M;
-    while (ctx->bucket2node[b] == -1) {
-        uint64_t h2 = ch_hash64(&h, sizeof(h), ctx->seed ^ b);
-        int limit = ctx->prev_size[b];
-        b = h2 % limit;
-        h = h2;
-    }
-    return ctx->bucket2node[b];
-}
-```
+1.  Navigate to the Go directory:
+    ```sh
+    cd anchor-hashing/go
+    ```
+2.  Run the experiment:
+    ```sh
+    go run ./cmd/experiment/main.go
+    ```
+    This will generate `anchor_experiment.csv`, `anchor_remap_removal_curve.csv`, and `anchor_remap_addition_curve.csv` in the `anchor-hashing/results/` directory.
 
-删除：将该 bucket 标记为 -1，记录删除时活动数，入栈；添加：出栈恢复。
-This directory contains implementations of the Anchor Hashing algorithm in Go and C.
+### Plotting Results
 
-## Concept
+1.  Navigate to the scripts directory (from the project root):
+    ```sh
+    cd anchor-hashing/scripts
+    ```
+2.  Run the plotting script:
+    ```sh
+    python3 plot.py
+    ```
+    This will generate `key_distribution.png`, `remapping_removal_impact.png`, and `remapping_addition_impact.png` in the `anchor-hashing/results/` directory.
 
-Anchor Hashing is a consistent hashing algorithm that provides full consistency, high performance, and a low memory footprint. It was designed to overcome some of the limitations of traditional ring-based consistent hashing algorithms.
+## Experiment Details
 
-The core idea behind Anchor Hashing is to use a pre-allocated, fixed-size array of "anchor" buckets. When a key needs to be mapped to a server, it is first hashed to one of these anchor buckets.
-
-- If the assigned anchor bucket is active (meaning the corresponding server is online), the key is mapped to that server.
-- If the bucket is inactive (the server has been removed or is offline), the key is rehashed to another anchor bucket, and this process continues until an active bucket is found.
-
-This approach ensures that when a server is added or removed, only a proportional number of keys are remapped, thus achieving full consistency and minimal disruption.
-
-## Implementations
-
-- **[Go](./go/)**: A Go implementation of Anchor Hashing.
-- **[C](./c/)**: A C implementation of Anchor Hashing.
-
-Refer to the `README.md` files in the respective directories for instructions on how to run the tests and examples.
-
-## Experiment Results
-
-**Note:** The current C and Go implementations in this repository are simplified versions of Anchor Hashing. They primarily use a modulo operation (`hash % num_nodes`) for key-to-node mapping, which does not fully exhibit the minimal remapping properties of a true Anchor Hashing algorithm (which involves rehashing to alternative anchor buckets).
+The experiments measure the following aspects of AnchorHash:
 
 ### Key Distribution (Peak-to-Average Ratio)
 
-This metric indicates how evenly keys are distributed across the available nodes. A ratio closer to 1.00 signifies a more even distribution.
+This metric assesses how evenly keys are distributed across the active nodes. A ratio closer to 1.00 indicates a more uniform distribution.
 
-*   **C Implementation:** 1.00
-*   **Go Implementation:** 1.00
+### Remapping Ratio (Node Removal)
 
-Both implementations show excellent key distribution, with keys being very evenly spread across the nodes.
+This experiment simulates node failures by progressively removing a percentage of nodes from an initial set (e.g., 1000 nodes). It measures the percentage of keys that change their assigned node after each removal step. A lower percentage indicates better consistency.
 
-### Storage Overhead
+### Remapping Ratio (Node Addition)
 
-This refers to the memory footprint required by the hashing algorithm's data structures.
+This experiment simulates node recovery or cluster expansion. It starts with an initial set of nodes, removes a fixed percentage, and then progressively adds nodes back. It measures the percentage of keys that change their assigned node during the addition process, relative to the state after the initial removal.
 
-*   **C Implementation:** Uses a linked list to store active nodes. The overhead is proportional to the number of active nodes (`N`), storing node names and pointers. It does not utilize a large, fixed-size anchor array.
-*   **Go Implementation:** Uses a `map[string]int` and a `[]string` slice to manage nodes. The overhead is proportional to the number of active nodes (`N`), storing node names and their internal representations.
+## Expected Results
 
-Compared to a full Anchor Hashing implementation that might use a large pre-allocated anchor array, these simplified versions have a lower memory footprint, primarily storing only the active nodes.
+AnchorHash is expected to show excellent key distribution (peak-to-average ratio close to 1.00) and very low remapping ratios during both node removal and addition operations, demonstrating its efficiency and consistency.
 
-### Impact of Node Addition/Removal on Key Remapping
+## References
 
-This measures the percentage of keys that change their assigned node when a node is added or removed. Lower percentages indicate better consistency.
-
-| Operation | Remapped Keys (C) | Remapped Keys (Go) | Total Keys | Percentage Remapped (C) | Percentage Remapped (Go) |
-|-----------|-------------------|--------------------|------------|-------------------------|--------------------------|
-| Remove    | 9017              | 8899               | 10000      | 90.17%                  | 88.99%                   |
-| Add       | 0                 | 0                  | 10000      | 0.00%                   | 0.00%                    |
-
-As expected due to the simplified `hash % num_nodes` logic, removing a node results in a very high percentage of remapped keys (around 90%). This is because the total number of nodes changes, causing most keys to map to a different node. The 0% remapping on adding a node back is a characteristic of this specific simplified implementation, where the new node is simply added to the list/slice and the modulo operation might coincidentally map keys to their original nodes or new nodes without further remapping of existing keys.
-
-### Scheduling Order Result Table
-
-The current simplified implementations of Anchor Hashing do not involve a "scheduling order" or "probing sequence" in the traditional sense of consistent hashing algorithms like hash rings or Maglev. The `Get` function directly calculates a hash and uses a modulo operation (`hash % num_nodes`) to determine the target node's index in a list (C) or sorted slice (Go). There is no explicit sequence of alternative nodes or buckets that are "probed" or "scheduled" for a given key.
+-   AnchorHash Paper and Official Implementation:
+    [https://arxiv.org/abs/1908.08762](https://arxiv.org/abs/1908.08762)

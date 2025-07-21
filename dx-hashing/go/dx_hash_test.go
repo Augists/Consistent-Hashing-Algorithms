@@ -1,62 +1,30 @@
 package dxhash
 
 import (
-	"fmt"
 	"testing"
 )
 
-func TestAdd(t *testing.T) {
-	h := New(10)
-	_, err := h.Add("node1")
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-	if len(h.nodeMap) != 1 {
-		t.Errorf("expected 1 node, got %d", len(h.nodeMap))
-	}
-}
-
-func TestRemove(t *testing.T) {
-	h := New(10)
-	h.Add("node1")
-	err := h.Remove("node1")
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-	if len(h.nodeMap) != 0 {
-		t.Errorf("expected 0 nodes, got %d", len(h.nodeMap))
+func TestBasicMapping(t *testing.T) {
+	h := NewDxHash(10, 10)
+	for k := uint64(0); k < 1000; k++ {
+		b := h.Map(k)
+		if b < 0 || b >= 10 {
+			t.Fatalf("key %d mapped to invalid bucket %d", k, b)
+		}
 	}
 }
 
-func TestGet(t *testing.T) {
-	h := New(10)
-	h.Add("node1")
-	h.Add("node2")
-	node, err := h.Get("my-key")
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+func TestRemoveAdd(t *testing.T) {
+	h := NewDxHash(8, 8)
+	before := h.Map(12345)
+	h.Remove(before)
+	after := h.Map(12345)
+	if after == before {
+		t.Fatalf("remove did not change mapping")
 	}
-	if node == "" {
-		t.Errorf("expected a node, got empty string")
-	}
-}
-
-func TestFull(t *testing.T) {
-	h := New(2)
-	h.Add("node1")
-	h.Add("node2")
-	_, err := h.Add("node3")
-	if err == nil {
-		t.Errorf("expected an error, got nil")
-	}
-}
-
-func BenchmarkGet(b *testing.B) {
-	h := New(100)
-	for i := 0; i < 100; i++ {
-		h.Add(fmt.Sprintf("node%d", i))
-	}
-	for i := 0; i < b.N; i++ {
-		h.Get(fmt.Sprintf("key%d", i))
+	h.Add(before)
+	again := h.Map(12345)
+	if again != before {
+		t.Fatalf("add did not restore mapping")
 	}
 }

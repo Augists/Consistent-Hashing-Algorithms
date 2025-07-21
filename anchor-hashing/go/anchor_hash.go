@@ -1,81 +1,83 @@
 package anchorhash
 
 import (
-	"fmt"
-	"sort"
-	"sync"
+	"hash/fnv"
 )
 
-// AnchorHash is a consistent hashing implementation.
 type AnchorHash struct {
-	mu      sync.RWMutex
-	nodes   map[string]int
-	nodeKeys []string
+	A      []bool // Active buckets
+	W      []int  // Working set
+	L      []int  // Location of each bucket in W
+	R      []int  // Restore chain (removal parent)
+	N      int    // Total buckets
+	Acount int    // Number of active buckets
 }
 
-// New creates a new AnchorHash instance.
-func New() *AnchorHash {
-	return &AnchorHash{
-		nodes: make(map[string]int),
+func NewAnchorHash(N, a int) *AnchorHash {
+	ah := &AnchorHash{
+		A:      make([]bool, N),
+		W:      make([]int, N),
+		L:      make([]int, N),
+		R:      make([]int, N),
+		N:      N,
+		Acount: a,
 	}
+	for i := 0; i < N; i++ {
+		ah.A[i] = i < a
+		ah.W[i] = i
+		ah.L[i] = i
+		ah.R[i] = -1
+	}
+	return ah
 }
 
-// Add adds nodes to the hash.
-func (h *AnchorHash) Add(nodes ...string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+func (ah *AnchorHash) hash(key uint64, salt int) int {
+	h := fnv.New64a()
+	var b [16]byte
+	for i := 0; i < 8; i++ {
+		b[i] = byte(key >> (8 * i))
+	}
+	for i := 0; i < 8; i++ {
+		b[8+i] = byte(salt >> (8 * i))
+	}
+	h.Write(b[:])
+	return int(h.Sum64() % uint64(ah.N))
+}
 
-	for _, node := range nodes {
-		if _, ok := h.nodes[node]; !ok {
-			h.nodes[node] = len(h.nodes)
-			h.nodeKeys = append(h.nodeKeys, node)
+func (ah *AnchorHash) Map(key uint64) int {
+	b := ah.hash(key, 0)
+	for !ah.A[b] {
+		b = ah.R[b]
+		if b < 0 {
+			return -1
 		}
 	}
-	sort.Strings(h.nodeKeys)
+	return b
 }
 
-// Get returns the node for the given key.
-func (h *AnchorHash) Get(key string) (string, error) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	if len(h.nodes) == 0 {
-		return "", fmt.Errorf("no nodes in hash")
+func (ah *AnchorHash) Remove(b int) bool {
+	if !ah.A[b] || ah.Acount <= 1 {
+		return false
 	}
-
-	hash := h.hash(key)
-	idx := h.binarySearch(hash)
-	return h.nodeKeys[idx], nil
+	pos := ah.L[b]
+	last := ah.Acount - 1
+	lastB := ah.W[last]
+	ah.W[pos] = ah.W[last]
+	ah.L[lastB] = pos
+	ah.Acount--
+	ah.A[b] = false
+	ah.R[b] = lastB
+	return true
 }
 
-// Remove removes nodes from the hash.
-func (h *AnchorHash) Remove(nodes ...string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	for _, node := range nodes {
-		delete(h.nodes, node)
+func (ah *AnchorHash) Add(b int) bool {
+	if ah.A[b] || ah.Acount >= ah.N {
+		return false
 	}
-
-	h.nodeKeys = make([]string, 0, len(h.nodes))
-	for node := range h.nodes {
-		h.nodeKeys = append(h.nodeKeys, node)
-	}
-	sort.Strings(h.nodeKeys)
-}
-
-func (h *AnchorHash) hash(key string) uint64 {
-	// Simple FNV-1a hash
-	hash := uint64(14695981039346656037)
-	for i := 0; i < len(key); i++ {
-		hash ^= uint64(key[i])
-		hash *= uint64(1099511628211)
-	}
-	return hash
-}
-
-func (h *AnchorHash) binarySearch(hash uint64) int {
-	// This is a simplified version of anchor hash, for demonstration.
-	// A full implementation would involve a more complex mapping.
-	return int(hash % uint64(len(h.nodeKeys)))
+	ah.A[b] = true
+	ah.W[ah.Acount] = b
+	ah.L[b] = ah.Acount
+	ah.Acount++
+	ah.R[b] = -1
+	return true
 }

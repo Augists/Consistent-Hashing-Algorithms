@@ -1,96 +1,57 @@
 #include "dx_hash.h"
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
-#define FNV_OFFSET_BASIS 14695981039346656037UL
-#define FNV_PRIME 1099511628211UL
-
-struct dx_hash_t {
-    char** nodes;
-    int* node_status;
-    int* inactive;
-    size_t size;
-    size_t inactive_count;
-};
-
-static uint64_t hash_fnv1a(const char* key) {
-    uint64_t hash = FNV_OFFSET_BASIS;
-    for (const char* p = key; *p; p++) {
-        hash ^= (uint64_t)(*p);
-        hash *= FNV_PRIME;
-    }
-    return hash;
+// Simple hash function (can be replaced with a better one)
+static uint64_t simple_hash(uint64_t key, int salt) {
+    key ^= (uint64_t)salt * 0x9e3779b97f4a7c15ULL;
+    key ^= (key >> 33);
+    key *= 0xff51afd7ed558ccdULL;
+    key ^= (key >> 33);
+    key *= 0xc4ceb9fe1a85ec53ULL;
+    key ^= (key >> 33);
+    return key;
 }
 
-static uint64_t next_random(uint64_t r) {
-    return (r * 1664525 + 1013904223);
+int dx_hash_init(dx_hash_t *ctx, int N, int a) {
+    if (a > N || a <= 0 || N <= 0) return -1;
+    ctx->N = N;
+    ctx->a = a;
+    ctx->A = malloc(N * sizeof(int));
+    if (!ctx->A) return -1;
+    for (int i = 0; i < N; ++i) {
+        ctx->A[i] = (i < a) ? 1 : 0;
+    }
+    return 0;
 }
 
-dx_hash_t* dx_hash_new(size_t size) {
-    dx_hash_t* h = (dx_hash_t*)malloc(sizeof(dx_hash_t));
-    if (!h) return NULL;
-
-    h->nodes = (char**)calloc(size, sizeof(char*));
-    h->node_status = (int*)calloc(size, sizeof(int));
-    h->inactive = (int*)malloc(size * sizeof(int));
-    h->size = size;
-    h->inactive_count = size;
-
-    for (size_t i = 0; i < size; i++) {
-        h->inactive[i] = size - 1 - i;
-    }
-
-    return h;
+void dx_hash_free(dx_hash_t *ctx) {
+    free(ctx->A);
 }
 
-void dx_hash_free(dx_hash_t* h) {
-    if (!h) return;
-    for (size_t i = 0; i < h->size; i++) {
-        free(h->nodes[i]);
+// DxHash: double hashing (jump style)
+int dx_hash_map(dx_hash_t *ctx, uint64_t key) {
+    int N = ctx->N;
+    int h1 = simple_hash(key, 0) % N;
+    int h2 = 1 + (simple_hash(key, 1) % (N - 1));
+    int b = h1;
+    for (int i = 0; i < N; ++i) {
+        if (ctx->A[b]) return b;
+        b = (b + h2) % N;
     }
-    free(h->nodes);
-    free(h->node_status);
-    free(h->inactive);
-    free(h);
+    return -1;
 }
 
-int dx_hash_add(dx_hash_t* h, const char* node) {
-    if (h->inactive_count == 0) {
-        return -1; // Hash is full
-    }
-
-    int index = h->inactive[--h->inactive_count];
-    h->nodes[index] = strdup(node);
-    h->node_status[index] = 1;
-
-    return index;
+int dx_hash_remove(dx_hash_t *ctx, int b) {
+    if (!ctx->A[b] || ctx->a <= 1) return -1;
+    ctx->A[b] = 0;
+    ctx->a--;
+    return 0;
 }
 
-int dx_hash_remove(dx_hash_t* h, const char* node) {
-    for (size_t i = 0; i < h->size; i++) {
-        if (h->node_status[i] && strcmp(h->nodes[i], node) == 0) {
-            h->node_status[i] = 0;
-            h->inactive[h->inactive_count++] = i;
-            free(h->nodes[i]);
-            h->nodes[i] = NULL;
-            return 0; // Success
-        }
-    }
-    return -1; // Node not found
-}
-
-const char* dx_hash_get(dx_hash_t* h, const char* key) {
-    if (h->inactive_count == h->size) {
-        return NULL; // No nodes in hash
-    }
-
-    uint64_t r = hash_fnv1a(key);
-    while (1) {
-        size_t node_id = r % h->size;
-        if (h->node_status[node_id]) {
-            return h->nodes[node_id];
-        }
-        r = next_random(r);
-    }
+int dx_hash_add(dx_hash_t *ctx, int b) {
+    if (ctx->A[b] || ctx->a >= ctx->N) return -1;
+    ctx->A[b] = 1;
+    ctx->a++;
+    return 0;
 }

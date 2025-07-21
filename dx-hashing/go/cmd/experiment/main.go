@@ -1,108 +1,200 @@
 package main
 
 import (
+	"encoding/csv"
 	"fmt"
+	"os"
+	"sort"
 
-	"github.com/augists/consistent-hashing-algorithms/dx-hashing/go"
+	dxhash "dxhash"
 )
 
 const (
-	numNodes  = 10
-	numKeys   = 1000000
-	hashSize  = 20 // Must be >= numNodes
-	remapKeys = 10000 // Number of keys to test for remapping
+	InitialNodes = 1000
+	NumKeys      = 1000000 // Increased keys for better statistical significance with more nodes
+
+	// For remapping curve experiments
+	RemovalSteps               = 11 // 0% to 50% removal in 5% increments
+	AdditionSteps              = 11 // 0% to 50% addition in 5% increments (relative to removed nodes)
+	RemovePercentageForAddition = 0.20 // Remove 20% of nodes before adding back
 )
 
 func main() {
-	// --- Key Distribution Experiment ---
-	hDist := dxhash.New(hashSize)
-	nodesDist := make([]string, numNodes)
-	countsDist := make(map[string]int)
-
-	for i := 0; i < numNodes; i++ {
-		nodeName := fmt.Sprintf("node%d", i)
-		nodesDist[i] = nodeName
-		countsDist[nodeName] = 0
-		hDist.Add(nodeName)
-	}
-
-	for i := 0; i < numKeys; i++ {
-		key := fmt.Sprintf("key%d", i)
-		node, err := hDist.Get(key)
-		if err != nil {
-			panic(err)
+	// Peak-to-Average Ratio Experiment
+	h := dxhash.NewDxHash(InitialNodes, InitialNodes)
+	counts := make([]int, InitialNodes)
+	for k := uint64(0); k < NumKeys; k++ {
+		b := h.Map(k)
+		if b >= 0 {
+			counts[b]++
 		}
-		countsDist[node]++
 	}
-
-	// Print distribution results to stdout
-	fmt.Println("DX_DIST_START")
-	fmt.Println("Node,Keys,Algorithm")
-	for _, nodeName := range nodesDist {
-		fmt.Printf("%s,%d,dx_go\n", nodeName, countsDist[nodeName])
-	}
-	fmt.Println("DX_DIST_END")
-
-	// --- Remapping Experiment ---
-	hRemap := dxhash.New(hashSize)
-	initialNodeMappings := make(map[string]string)
-	remapKeysSlice := make([]string, remapKeys)
-
-	for i := 0; i < numNodes; i++ {
-		nodeName := fmt.Sprintf("node%d", i)
-		hRemap.Add(nodeName)
-	}
-
-	for i := 0; i < remapKeys; i++ {
-		key := fmt.Sprintf("remap_key%d", i)
-		remapKeysSlice[i] = key
-		node, err := hRemap.Get(key)
-		if err != nil {
-			panic(err)
+	vals := make([]int, 0, InitialNodes)
+	for i := 0; i < InitialNodes; i++ {
+		if h.Active()[i] {
+			vals = append(vals, counts[i])
 		}
-		initialNodeMappings[key] = node
 	}
+	sort.Ints(vals)
+	peak := vals[len(vals)-1]
+	sum := 0
+	for _, v := range vals {
+		sum += v
+	}
+	avg := float64(sum) / float64(len(vals))
+	peakToAvg := float64(peak) / avg
 
-	// Removed "Removing node9..." print
-	hRemap.Remove("node9")
-
-	remappedOnRemove := 0
-	for _, key := range remapKeysSlice {
-		newNode, err := hRemap.Get(key)
+	// Write peak-to-average data
+	fPeak, err := os.Create("../../results/dx_experiment.csv")
+	if err != nil {
+		fPeak, err = os.Create("../results/dx_experiment.csv")
 		if err != nil {
-			if initialNodeMappings[key] != "" {
-				remappedOnRemove++
+			fmt.Println("Cannot open results/dx_experiment.csv for write!")
+			return
+		}
+	}
+	wPeak := csv.NewWriter(fPeak)
+	wPeak.Write([]string{"peak_to_average", fmt.Sprintf("%.4f", peakToAvg)})
+	wPeak.Flush()
+	fPeak.Close()
+	fmt.Println("Peak/average data written to results/dx_experiment.csv")
+
+	// Remapping Ratio Experiment (Node Removal)
+	remapRemovalExperiment()
+
+	// Remapping Ratio Experiment (Node Addition)
+	remapAdditionExperiment()
+}
+
+func remapRemovalExperiment() {
+	f, err := os.Create("../../results/dx_remap_removal_curve.csv")
+	if err != nil {
+		f, err = os.Create("../results/dx_remap_removal_curve.csv")
+		if err != nil {
+			fmt.Println("Cannot open results/dx_remap_removal_curve.csv for write!")
+			return
+		}
+	}
+	w := csv.NewWriter(f)
+	w.Write([]string{"remove_ratio", "remap_ratio"})
+
+	for step := 0; step < RemovalSteps; step++ {
+		removeRatio := float64(step) / float64(RemovalSteps-1) * 0.5 // 0% to 50%
+		removeCnt := int(float64(InitialNodes) * removeRatio)
+		if removeCnt > InitialNodes {
+			removeCnt = InitialNodes
+		}
+
+		h2 := dxhash.NewDxHash(InitialNodes, InitialNodes)
+		before := make([]int, NumKeys)
+		for k := uint64(0); k < NumKeys; k++ {
+			before[k] = h2.Map(k)
+		}
+
+		removedActual := 0
+		for i := 0; i < InitialNodes && removedActual < removeCnt; i++ {
+			if h2.Active()[i] { // Only remove if active
+				h2.Remove(i)
+				removedActual++
 			}
-			continue
 		}
-		if initialNodeMappings[key] != newNode {
-			remappedOnRemove++
-		}
-	}
-	// Removed "Keys remapped after removal: %d" print
 
-	// Removed "Adding node9 back..." print
-	hRemap.Add("node9")
-
-	remappedOnAdd := 0
-	for _, key := range remapKeysSlice {
-		newNode, err := hRemap.Get(key)
-		if err != nil {
-			if initialNodeMappings[key] != "" {
-				remappedOnAdd++
+		changed := 0
+		for k := uint64(0); k < NumKeys; k++ {
+			after := h2.Map(k)
+			if after != before[k] {
+				changed++
 			}
-			continue
 		}
-		if initialNodeMappings[key] != newNode {
-			remappedOnAdd++
+		remapRatio := float64(changed) / float64(NumKeys)
+		w.Write([]string{fmt.Sprintf("%.2f", float64(removedActual)/InitialNodes), fmt.Sprintf("%.4f", remapRatio)})
+	}
+	w.Flush()
+	f.Close()
+	fmt.Println("Remapping removal curve data written to results/dx_remap_removal_curve.csv")
+}
+
+func remapAdditionExperiment() {
+	f, err := os.Create("../../results/dx_remap_addition_curve.csv")
+	if err != nil {
+		f, err = os.Create("../results/dx_remap_addition_curve.csv")
+		if err != nil {
+			fmt.Println("Cannot open results/dx_remap_addition_curve.csv for write!")
+			return
 		}
 	}
-	// Removed "Keys remapped after addition: %d" print
+	w := csv.NewWriter(f)
+	w.Write([]string{"add_ratio", "remap_ratio"})
 
-	// Print remapping results to stdout
-	fmt.Println("DX_REMAP_START")
-	fmt.Println("Operation,RemappedKeys,TotalKeys,Algorithm")
-	fmt.Printf("Remove,%d,%d,dx_go\n", remappedOnRemove, remapKeys)
-	fmt.Printf("Add,%d,%d,dx_go\n", remappedOnAdd, remapKeys)
-	fmt.Println("DX_REMAP_END")
+	// Initial state: remove a fixed percentage of nodes
+	initialRemovedCount := int(float64(InitialNodes) * RemovePercentageForAddition)
+	if initialRemovedCount == 0 && InitialNodes > 0 {
+		initialRemovedCount = 1
+	}
+	if initialRemovedCount > InitialNodes {
+		initialRemovedCount = InitialNodes
+	}
+
+	baseCtx := dxhash.NewDxHash(InitialNodes, InitialNodes)
+	initialMappings := make([]int, NumKeys)
+	for k := uint64(0); k < NumKeys; k++ {
+		initialMappings[k] = baseCtx.Map(k)
+	}
+
+	// Perform initial removal
+	removedIndices := make([]int, 0, initialRemovedCount)
+	for i := 0; i < InitialNodes && len(removedIndices) < initialRemovedCount; i++ {
+		if baseCtx.Active()[i] {
+			baseCtx.Remove(i)
+			removedIndices = append(removedIndices, i)
+		}
+	}
+
+	// Store mappings after initial removal
+	mappingsAfterInitialRemoval := make([]int, NumKeys)
+	for k := uint64(0); k < NumKeys; k++ {
+		mappingsAfterInitialRemoval[k] = baseCtx.Map(k)
+	}
+
+	// Now, add nodes back iteratively
+	for step := 0; step < AdditionSteps; step++ {
+		addRatio := float64(step) / float64(AdditionSteps-1) // 0% to 100% of removed nodes added back
+		addCnt := int(float64(initialRemovedCount) * addRatio)
+		if addCnt > initialRemovedCount {
+			addCnt = initialRemovedCount
+		}
+
+		// Create a new context for each step to ensure clean state
+		currentCtx := dxhash.NewDxHash(InitialNodes, InitialNodes-initialRemovedCount) // Start with removed nodes
+
+		// Re-remove nodes for current step
+		for _, idx := range removedIndices {
+			currentCtx.Remove(idx)
+		}
+
+		// Add back nodes for current step
+		for i := 0; i < addCnt; i++ {
+			currentCtx.Add(removedIndices[i])
+		}
+
+		changed := 0
+		for k := uint64(0); k < NumKeys; k++ {
+			currentMap := currentCtx.Map(k)
+			if currentMap != mappingsAfterInitialRemoval[k] {
+				changed++
+			}
+		}
+		w.Write([]string{fmt.Sprintf("%.2f", float64(addCnt)/floatMap(initialRemovedCount)), fmt.Sprintf("%.4f", float64(changed)/NumKeys)})
+	}
+	w.Flush()
+	f.Close()
+	fmt.Println("Remapping addition curve data written to results/dx_remap_addition_curve.csv")
+}
+
+// Helper function to avoid division by zero if initialRemovedCount is 0
+func floatMap(val int) float64 {
+	if val == 0 {
+		return 1.0 // Avoid division by zero, effectively 100% if no nodes were removed
+	}
+	return float64(val)
 }

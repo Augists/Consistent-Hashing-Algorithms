@@ -1,3 +1,3 @@
-module github.com/augists/consistent-hashing-algorithms/anchor-hashing/go
+module github.com/Augists/Consistent-Hashing-Algorithms/anchor-hashing/go
 
-go 1.24.4
+go 1.20
